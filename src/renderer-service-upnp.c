@@ -39,6 +39,12 @@
 #include "task-processor.h"
 #include "upnp.h"
 
+#ifdef UA_PREFIX
+	#define PRG_NAME UA_PREFIX " dLeyna/" VERSION
+#else
+	#define PRG_NAME "dLeyna/" VERSION
+#endif
+
 #define RSU_INTERFACE_GET_VERSION "GetVersion"
 #define RSU_INTERFACE_GET_SERVERS "GetServers"
 #define RSU_INTERFACE_RELEASE "Release"
@@ -1011,6 +1017,8 @@ int main(int argc, char *argv[])
 
 	rsu_log_init(argv[0]);
 	rsu_settings_new(&g_context.settings);
+
+	g_set_prgname(PRG_NAME);
 
 	g_context.root_node_info =
 		g_dbus_node_info_new_for_xml(g_rsu_root_introspection, NULL);
