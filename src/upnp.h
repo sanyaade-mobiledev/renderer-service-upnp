@@ -81,5 +81,5 @@ void rsu_upnp_host_uri(rsu_upnp_t *upnp, rsu_task_t *task,
 void rsu_upnp_remove_uri(rsu_upnp_t *upnp, rsu_task_t *task,
 			 rsu_upnp_task_complete_t cb);
 void rsu_upnp_lost_client(rsu_upnp_t *upnp, const gchar *client_name);
-
+void rsu_upnp_unsubscribe(rsu_upnp_t *upnp);
 #endif

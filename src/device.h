@@ -85,6 +85,8 @@ gboolean rsu_device_new(GDBusConnection *connection,
 
 void rsu_device_delete(void *device);
 
+void rsu_device_unsubscribe(void *device);
+
 void rsu_device_append_new_context(rsu_device_t *device,
 				   const gchar *ip_address,
 				   GUPnPDeviceProxy *proxy);

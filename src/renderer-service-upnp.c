@@ -381,11 +381,20 @@ static const GDBusInterfaceVTable *g_server_vtables[RSU_INTERFACE_INFO_MAX] = {
 	&g_device_vtable
 };
 
+static gboolean prv_context_mainloop_quit_cb(gpointer user_data)
+{
+	g_main_loop_quit(g_context.main_loop);
+
+	return FALSE;
+}
+
 static gboolean prv_context_quit_cb(gpointer user_data)
 {
 	RSU_LOG_DEBUG("Quitting");
 
-	g_main_loop_quit(g_context.main_loop);
+	rsu_upnp_unsubscribe(g_context.upnp);
+
+	g_timeout_add_seconds(1, prv_context_mainloop_quit_cb, NULL);
 
 	return FALSE;
 }

@@ -94,6 +94,8 @@ static void prv_service_proxies_free(rsu_service_proxies_t *service_proxies)
 
 static void prv_rsu_context_unsubscribe(rsu_device_context_t *ctx)
 {
+	RSU_LOG_DEBUG("Enter");
+
 	if (ctx->timeout_id_cm) {
 		(void) g_source_remove(ctx->timeout_id_cm);
 		ctx->timeout_id_cm = 0;
@@ -111,20 +113,34 @@ static void prv_rsu_context_unsubscribe(rsu_device_context_t *ctx)
 		(void) gupnp_service_proxy_remove_notify(
 			ctx->service_proxies.cm_proxy, "SinkProtocolInfo",
 			prv_sink_change_cb, ctx->device);
+
+		gupnp_service_proxy_set_subscribed(
+				ctx->service_proxies.cm_proxy, FALSE);
+
 		ctx->subscribed_cm = FALSE;
 	}
 	if (ctx->subscribed_av) {
 		(void) gupnp_service_proxy_remove_notify(
 			ctx->service_proxies.av_proxy, "LastChange",
 			prv_last_change_cb, ctx->device);
+
+		gupnp_service_proxy_set_subscribed(
+				ctx->service_proxies.av_proxy, FALSE);
+
 		ctx->subscribed_av = FALSE;
 	}
 	if (ctx->subscribed_rc) {
 		(void) gupnp_service_proxy_remove_notify(
 			ctx->service_proxies.rc_proxy, "LastChange",
 			prv_rc_last_change_cb, ctx->device);
+
+		gupnp_service_proxy_set_subscribed(
+				ctx->service_proxies.rc_proxy, FALSE);
+
 		ctx->subscribed_rc = FALSE;
 	}
+
+	RSU_LOG_DEBUG("Exit");
 }
 
 static void prv_rsu_context_delete(gpointer context)
@@ -334,6 +350,20 @@ void rsu_device_delete(void *device)
 			g_ptr_array_free(dev->transport_play_speeds, TRUE);
 		g_free(dev->rate);
 		g_free(dev);
+	}
+}
+
+void rsu_device_unsubscribe(void *device)
+{
+	unsigned int i;
+	rsu_device_t *dev = device;
+	rsu_device_context_t *context;
+
+	if (dev) {
+		for (i = 0; i < dev->contexts->len; ++i) {
+			context = g_ptr_array_index(dev->contexts, i);
+			prv_rsu_context_unsubscribe(context);
+		}
 	}
 }
 

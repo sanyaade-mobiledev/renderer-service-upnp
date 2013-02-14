@@ -632,3 +632,20 @@ void rsu_upnp_lost_client(rsu_upnp_t *upnp, const gchar *client_name)
 {
 	rsu_host_service_lost_client(upnp->host_service, client_name);
 }
+
+void rsu_upnp_unsubscribe(rsu_upnp_t *upnp)
+{
+	GHashTableIter iter;
+	gpointer value;
+	rsu_device_t *device;
+
+	RSU_LOG_DEBUG("Enter");
+
+	g_hash_table_iter_init(&iter, upnp->server_udn_map);
+	while (g_hash_table_iter_next(&iter, NULL, &value)) {
+		device = value;
+		rsu_device_unsubscribe(device);
+	}
+
+	RSU_LOG_DEBUG("Exit");
+}
