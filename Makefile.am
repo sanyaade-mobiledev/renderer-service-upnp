@@ -21,21 +21,24 @@ renderer_service_upnp_sources =	src/async.c			\
 				src/host-service.c		\
 				src/log.c			\
 				src/renderer-service-upnp.c	\
+				src/service-task.c		\
 				src/settings.c			\
 				src/task.c			\
 				src/task-processor.c		\
 				src/upnp.c
 
-renderer_service_upnp_headers =	src/async.h		\
-				src/device.h		\
-				src/error.h		\
-				src/host-service.h	\
-				src/log.h		\
-				src/prop-defs.h		\
-				src/settings.h		\
-				src/task.h		\
-				src/task-atom.h		\
-				src/task-processor.h	\
+renderer_service_upnp_headers =	src/async.h			\
+				src/device.h			\
+				src/error.h			\
+				src/host-service.h		\
+				src/log.h			\
+				src/prop-defs.h			\
+				src/renderer-service-upnp.h	\
+				src/service-task.h		\
+				src/settings.h			\
+				src/task.h			\
+				src/task-atom.h			\
+				src/task-processor.h		\
 				src/upnp.h
 
 libexec_PROGRAMS = renderer-service-upnp

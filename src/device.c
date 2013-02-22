@@ -1,7 +1,7 @@
 /*
  * renderer-service-upnp
  *
- * Copyright (C) 2012 Intel Corporation. All rights reserved.
+ * Copyright (C) 2012-2013 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU Lesser General Public License,
@@ -32,12 +32,20 @@
 #include "error.h"
 #include "log.h"
 #include "prop-defs.h"
+#include "service-task.h"
 
 typedef void (*rsu_device_local_cb_t)(rsu_async_task_t *cb_data);
 
 typedef struct rsu_device_data_t_ rsu_device_data_t;
 struct rsu_device_data_t_ {
 	rsu_device_local_cb_t local_cb;
+};
+
+/* Private structure used in chain task */
+typedef struct prv_new_device_ct_t_ prv_new_device_ct_t;
+struct prv_new_device_ct_t_ {
+	rsu_device_t *dev;
+	rsu_interface_info_t *interface_info;
 };
 
 static void prv_last_change_cb(GUPnPServiceProxy *proxy,
@@ -303,16 +311,20 @@ on_found:
 	return context;
 }
 
-void rsu_device_append_new_context(rsu_device_t *device,
-				   const gchar *ip_address,
-				   GUPnPDeviceProxy *proxy)
+static void prv_device_append_new_context(rsu_device_t *device,
+				       const gchar *ip_address,
+				       GUPnPDeviceProxy *proxy)
 {
 	rsu_device_context_t *new_context;
-	rsu_device_context_t *subscribed_context;
-	rsu_device_context_t *preferred_context;
 
 	prv_context_new(ip_address, proxy, device, &new_context);
 	g_ptr_array_add(device->contexts, new_context);
+}
+
+static void prv_device_subscribe_context(rsu_device_t *device)
+{
+	rsu_device_context_t *subscribed_context;
+	rsu_device_context_t *preferred_context;
 
 	subscribed_context = prv_device_get_subscribed_context(device);
 	preferred_context = rsu_device_get_context(device);
@@ -326,7 +338,15 @@ void rsu_device_append_new_context(rsu_device_t *device,
 		}
 		rsu_device_subscribe_to_service_changes(device);
 	}
+}
 
+void rsu_device_append_new_context(rsu_device_t *device,
+				   const gchar *ip_address,
+				   GUPnPDeviceProxy *proxy)
+{
+	prv_device_append_new_context(device, ip_address, proxy);
+
+	prv_device_subscribe_context(device);
 }
 
 void rsu_device_delete(void *device)
@@ -525,63 +545,231 @@ void rsu_device_subscribe_to_service_changes(rsu_device_t *device)
 	}
 }
 
-gboolean rsu_device_new(GDBusConnection *connection,
-			GUPnPDeviceProxy *proxy,
-			const gchar *ip_address,
-			guint counter,
-			rsu_interface_info_t *interface_info,
-			rsu_device_t **device)
+static void prv_as_prop_from_hash_table(const gchar *prop_name,
+					GHashTable *values, GHashTable *props)
 {
-	rsu_device_t *dev = g_new0(rsu_device_t, 1);
-	GString *new_path;
+	GVariantBuilder vb;
+	GHashTableIter iter;
+	gpointer key;
+	GVariant *val;
+
+	g_variant_builder_init(&vb, G_VARIANT_TYPE("as"));
+	g_hash_table_iter_init(&iter, values);
+
+	while (g_hash_table_iter_next(&iter, &key, NULL))
+		g_variant_builder_add(&vb, "s", key);
+
+	val = g_variant_ref_sink(g_variant_builder_end(&vb));
+	g_hash_table_insert(props, (gchar *)prop_name, val);
+}
+
+static void prv_process_protocol_info(rsu_device_t *device,
+				      const gchar *protocol_info)
+{
+	GVariant *val;
+	gchar **entries;
+	gchar **type_info;
 	unsigned int i;
+	GHashTable *protocols;
+	GHashTable *types;
+	const char http_prefix[] = "http-";
+
+	RSU_LOG_DEBUG("Enter");
+	RSU_LOG_DEBUG("prv_process_protocol_info: %s", protocol_info);
+
+	protocols = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
+					  NULL);
+	types = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+
+	val = g_variant_ref_sink(g_variant_new_string(protocol_info));
+	g_hash_table_insert(device->props.device_props,
+			    RSU_INTERFACE_PROP_PROTOCOL_INFO,
+			    val);
+
+	entries = g_strsplit(protocol_info, ",", 0);
+
+	for (i = 0; entries[i]; ++i) {
+		type_info = g_strsplit(entries[i], ":", 0);
+
+		if (type_info[0] && type_info[1] && type_info[2]) {
+			if (!g_ascii_strncasecmp(http_prefix, type_info[0],
+						 sizeof(http_prefix) - 1)) {
+				type_info[0][sizeof(http_prefix) - 2] = 0;
+			}
+
+			g_hash_table_insert(protocols,
+					    g_ascii_strdown(type_info[0], -1),
+					    NULL);
+			g_hash_table_insert(types,
+					    g_ascii_strdown(type_info[2], -1),
+					    NULL);
+		}
+
+		g_strfreev(type_info);
+	}
+
+	g_strfreev(entries);
+
+	prv_as_prop_from_hash_table(RSU_INTERFACE_PROP_SUPPORTED_URIS,
+				    protocols,
+				    device->props.root_props);
+
+	prv_as_prop_from_hash_table(RSU_INTERFACE_PROP_SUPPORTED_MIME,
+				    types,
+				    device->props.root_props);
+
+	g_hash_table_unref(types);
+	g_hash_table_unref(protocols);
+
+	RSU_LOG_DEBUG("Exit");
+}
+
+static void prv_get_protocol_info_cb(GUPnPServiceProxy *proxy,
+				     GUPnPServiceProxyAction *action,
+				     gpointer user_data)
+{
+	gchar *result = NULL;
+	GError *error = NULL;
+	prv_new_device_ct_t *priv_t = (prv_new_device_ct_t *)user_data;
 
 	RSU_LOG_DEBUG("Enter");
 
-	prv_props_init(&dev->props);
-	dev->connection = connection;
-	dev->contexts = g_ptr_array_new_with_free_func(prv_rsu_context_delete);
-
-	rsu_device_append_new_context(dev, ip_address, proxy);
-
-	new_path = g_string_new("");
-	g_string_printf(new_path, "%s/%u", RSU_SERVER_PATH, counter);
-
-	RSU_LOG_DEBUG("Server Path %s", new_path->str);
-
-	for (i = 0; i < RSU_INTERFACE_INFO_MAX; ++i) {
-		dev->ids[i] = g_dbus_connection_register_object(
-			connection,
-			new_path->str,
-			interface_info[i].interface,
-			interface_info[i].vtable,
-			NULL, NULL, NULL);
-
-		if (!dev->ids[i])
-			goto on_error;
+	if (!gupnp_service_proxy_end_action(proxy, action, &error, "Sink",
+					    G_TYPE_STRING, &result, NULL)) {
+		RSU_LOG_WARNING("GetProtocolInfo operation failed: %s",
+				error->message);
+		goto on_error;
 	}
 
-	dev->path = g_string_free(new_path, FALSE);
-
-	RSU_LOG_DEBUG("Device path <%s>", dev->path);
-
-	dev->rate = g_strdup("1");
-
-	*device = dev;
-
-	RSU_LOG_DEBUG("Exit with SUCCESS");
-
-	return TRUE;
+	prv_process_protocol_info(priv_t->dev, result);
 
 on_error:
 
-	g_string_free(new_path, TRUE);
+	if (error)
+		g_error_free(error);
 
-	rsu_device_delete(dev);
+	g_free(result);
 
-	RSU_LOG_DEBUG("Exit with FAIL");
+	RSU_LOG_DEBUG("Exit");
+}
 
-	return FALSE;
+static GUPnPServiceProxyAction *prv_get_protocol_info(rsu_service_task_t *task,
+						      GUPnPServiceProxy *proxy,
+						      gboolean *failed)
+{
+	*failed = FALSE;
+
+	return gupnp_service_proxy_begin_action(proxy, "GetProtocolInfo",
+					rsu_service_task_begin_action_cb,
+					task, NULL);
+}
+
+static GUPnPServiceProxyAction *prv_subscribe(rsu_service_task_t *task,
+					      GUPnPServiceProxy *proxy,
+					      gboolean *failed)
+{
+	rsu_device_t *device;
+
+	RSU_LOG_DEBUG("Enter");
+
+	device = rsu_service_task_get_device(task);
+
+	prv_device_subscribe_context(device);
+
+	*failed = FALSE;
+
+	RSU_LOG_DEBUG("Exit");
+
+	return NULL;
+}
+
+static GUPnPServiceProxyAction *prv_declare(rsu_service_task_t *task,
+					    GUPnPServiceProxy *proxy,
+					    gboolean *failed)
+{
+	unsigned int i;
+	rsu_device_t *device;
+	prv_new_device_ct_t *priv_t;
+
+	RSU_LOG_DEBUG("Enter");
+
+	*failed = FALSE;
+
+	device = rsu_service_task_get_device(task);
+
+	priv_t = (prv_new_device_ct_t *)rsu_service_task_get_user_data(task);
+
+	for (i = 0; i < RSU_INTERFACE_INFO_MAX; ++i) {
+		device->ids[i] = g_dbus_connection_register_object(
+			device->connection,
+			device->path,
+			priv_t->interface_info[i].interface,
+			priv_t->interface_info[i].vtable,
+			NULL, NULL, NULL);
+
+		if (!device->ids[i]) {
+			*failed = TRUE;
+			goto on_error;
+		}
+	}
+
+on_error:
+
+	RSU_LOG_DEBUG("Exit");
+
+	return NULL;
+}
+
+rsu_device_t *rsu_device_new(GDBusConnection *connection,
+			     GUPnPDeviceProxy *proxy,
+			     const gchar *ip_address,
+			     guint counter,
+			     rsu_interface_info_t *interface_info,
+			     const rsu_task_queue_key_t *queue_id)
+{
+	rsu_device_t *dev;
+	prv_new_device_ct_t *priv_t;
+	gchar *new_path;
+	rsu_device_context_t *context;
+	GUPnPServiceProxy *s_proxy;
+
+	RSU_LOG_DEBUG("New Device on %s", ip_address);
+
+	new_path = g_strdup_printf("%s/%u", RSU_SERVER_PATH, counter);
+	RSU_LOG_DEBUG("Server Path %s", new_path);
+
+	dev = g_new0(rsu_device_t, 1);
+	priv_t = g_new0(prv_new_device_ct_t, 1);
+
+	dev->connection = connection;
+	dev->contexts = g_ptr_array_new_with_free_func(prv_rsu_context_delete);
+	dev->path = new_path;
+	dev->rate = g_strdup("1");
+
+	priv_t->dev = dev;
+	priv_t->interface_info = interface_info;
+
+	prv_props_init(&dev->props);
+
+	prv_device_append_new_context(dev, ip_address, proxy);
+
+	context = rsu_device_get_context(dev);
+	s_proxy = context->service_proxies.cm_proxy;
+
+	rsu_service_task_add(queue_id, prv_get_protocol_info, dev, s_proxy,
+			     prv_get_protocol_info_cb, NULL, priv_t);
+
+	rsu_service_task_add(queue_id, prv_subscribe, dev, s_proxy,
+			     NULL, NULL, NULL);
+
+	rsu_service_task_add(queue_id, prv_declare, dev, s_proxy,
+			     NULL, g_free, priv_t);
+
+	rsu_task_queue_start(queue_id);
+
+	RSU_LOG_DEBUG("Exit");
+
+	return dev;
 }
 
 rsu_device_t *rsu_device_from_path(const gchar *path, GHashTable *device_list)
@@ -1232,80 +1420,6 @@ static void prv_rc_last_change_cb(GUPnPServiceProxy *proxy,
 on_error:
 
 	g_object_unref(parser);
-}
-
-static void prv_as_prop_from_hash_table(const gchar *prop_name,
-					GHashTable *values, GHashTable *props)
-{
-	GVariantBuilder vb;
-	GHashTableIter iter;
-	gpointer key;
-	GVariant *val;
-
-	g_variant_builder_init(&vb, G_VARIANT_TYPE("as"));
-	g_hash_table_iter_init(&iter, values);
-
-	while (g_hash_table_iter_next(&iter, &key, NULL))
-		g_variant_builder_add(&vb, "s", key);
-
-	val = g_variant_ref_sink(g_variant_builder_end(&vb));
-	g_hash_table_insert(props, (gchar *)prop_name, val);
-}
-
-static void prv_process_protocol_info(rsu_device_t *device,
-				      const gchar *protocol_info)
-{
-	GVariant *val;
-	gchar **entries;
-	gchar **type_info;
-	unsigned int i;
-	GHashTable *protocols;
-	GHashTable *types;
-	const char http_prefix[] = "http-";
-
-	protocols = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
-					  NULL);
-	types = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-
-	val = g_variant_ref_sink(g_variant_new_string(protocol_info));
-	g_hash_table_insert(device->props.device_props,
-			    RSU_INTERFACE_PROP_PROTOCOL_INFO,
-			    val);
-
-	entries = g_strsplit(protocol_info, ",", 0);
-
-	for (i = 0; entries[i]; ++i) {
-		type_info = g_strsplit(entries[i], ":", 0);
-
-		if (type_info[0] && type_info[1] && type_info[2]) {
-			if (!g_ascii_strncasecmp(http_prefix, type_info[0],
-						 sizeof(http_prefix) - 1)) {
-				type_info[0][sizeof(http_prefix) - 2] = 0;
-			}
-
-			g_hash_table_insert(protocols,
-					    g_ascii_strdown(type_info[0], -1),
-					    NULL);
-			g_hash_table_insert(types,
-					    g_ascii_strdown(type_info[2], -1),
-					    NULL);
-		}
-
-		g_strfreev(type_info);
-	}
-
-	g_strfreev(entries);
-
-	prv_as_prop_from_hash_table(RSU_INTERFACE_PROP_SUPPORTED_URIS,
-				    protocols,
-				    device->props.root_props);
-
-	prv_as_prop_from_hash_table(RSU_INTERFACE_PROP_SUPPORTED_MIME,
-				    types,
-				    device->props.root_props);
-
-	g_hash_table_unref(types);
-	g_hash_table_unref(protocols);
 }
 
 static void prv_sink_change_cb(GUPnPServiceProxy *proxy,

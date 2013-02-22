@@ -30,6 +30,7 @@
 #include <syslog.h>
 #include <sys/signalfd.h>
 
+#include "renderer-service-upnp.h"
 #include "async.h"
 #include "device.h"
 #include "error.h"
@@ -106,8 +107,6 @@ struct rsu_context_t_ {
 };
 
 static rsu_context_t g_context;
-
-#define RSU_SINK "renderer-service-upnp"
 
 static const gchar g_rsu_root_introspection[] =
 	"<node>"
@@ -380,6 +379,11 @@ static const GDBusInterfaceVTable *g_server_vtables[RSU_INTERFACE_INFO_MAX] = {
 	&g_rsu_push_host_vtable,
 	&g_device_vtable
 };
+
+rsu_task_processor_t *rsu_renderer_service_get_task_processor(void)
+{
+	return g_context.processor;
+}
 
 static gboolean prv_context_mainloop_quit_cb(gpointer user_data)
 {
@@ -942,8 +946,8 @@ static void prv_bus_acquired(GDBusConnection *connection, const gchar *name,
 		}
 
 		g_context.upnp = rsu_upnp_new(connection, info,
-					     prv_found_media_server,
-					     prv_lost_media_server);
+					      prv_found_media_server,
+					      prv_lost_media_server);
 	}
 }
 
@@ -1006,6 +1010,11 @@ static void prv_unregister_client(gpointer client)
 {
 	guint id = GPOINTER_TO_UINT(client);
 	g_bus_unwatch_name(id);
+}
+
+rsu_upnp_t *rsu_renderer_service_get_upnp(void)
+{
+	return g_context.upnp;
 }
 
 int main(int argc, char *argv[])

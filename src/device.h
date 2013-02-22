@@ -1,7 +1,7 @@
 /*
  * renderer-service-upnp
  *
- * Copyright (C) 2012 Intel Corporation. All rights reserved.
+ * Copyright (C) 2012-2013 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU Lesser General Public License,
@@ -31,8 +31,7 @@
 
 #include "host-service.h"
 #include "upnp.h"
-
-typedef struct rsu_device_t_ rsu_device_t;
+#include "renderer-service-upnp.h"
 
 typedef struct rsu_service_proxies_t_ rsu_service_proxies_t;
 struct rsu_service_proxies_t_ {
@@ -68,7 +67,6 @@ struct rsu_device_t_ {
 	guint ids[RSU_INTERFACE_INFO_MAX];
 	gchar *path;
 	GPtrArray *contexts;
-	gpointer current_task;
 	rsu_props_t props;
 	guint timeout_id;
 	guint max_volume;
@@ -76,12 +74,12 @@ struct rsu_device_t_ {
 	gchar *rate;
 };
 
-gboolean rsu_device_new(GDBusConnection *connection,
-			GUPnPDeviceProxy *proxy,
-			const gchar *ip_address,
-			guint counter,
-			rsu_interface_info_t *interface_info,
-			rsu_device_t **device);
+rsu_device_t *rsu_device_new(GDBusConnection *connection,
+			     GUPnPDeviceProxy *proxy,
+			     const gchar *ip_address,
+			     guint counter,
+			     rsu_interface_info_t *interface_info,
+			     const rsu_task_queue_key_t *queue_id);
 
 void rsu_device_delete(void *device);
 

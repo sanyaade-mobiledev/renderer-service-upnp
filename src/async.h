@@ -1,7 +1,7 @@
 /*
  * renderer-service-upnp
  *
- * Copyright (C) 2012 Intel Corporation. All rights reserved.
+ * Copyright (C) 2012-2013 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU Lesser General Public License,
@@ -46,6 +46,5 @@ struct rsu_async_task_t_ {
 gboolean rsu_async_task_complete(gpointer user_data);
 void rsu_async_task_cancelled(GCancellable *cancellable, gpointer user_data);
 void rsu_async_task_delete(rsu_async_task_t *task);
-void rsu_async_task_lost_object(gpointer user_data);
 void rsu_async_task_cancel(rsu_async_task_t *task);
 #endif
